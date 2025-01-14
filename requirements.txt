@@ -1,5 +1,6 @@
-flask
-sqlite3
-datetime
-os
-werkzeug
+Flask==3.0.0
+Jinja2==3.1.2
+Werkzeug==3.0.0
+itsdangerous==3.1.0
+click==8.1.3
+gunicorn==20.1.0
