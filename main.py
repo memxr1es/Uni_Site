@@ -4,6 +4,8 @@ from datetime import datetime
 import os
 from uuid import uuid4
 from werkzeug.utils import secure_filename
+import random
+
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
@@ -17,6 +19,57 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # Ограничение н
 
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
+
+# Features
+def generate_prediction(mood):
+    predictions = {
+        "радость": [
+            "Твоя радость взлетит до небес на этой вечеринке!",
+            "Ты найдешь повод для смеха даже на лекции по астрофизике."
+        ],
+        "тоска": [
+            "Этот спектакль раскрасит твой день новыми красками.",
+            "После концерта ты почувствуешь себя перерожденным."
+        ],
+        "вдохновение": [
+            "На выставке ты откроешь новое хобби — рисование.",
+            "Ты выйдешь с мероприятия с готовым планом на следующую неделю."
+        ]
+    }
+    return random.choice(predictions.get(mood, ["Не знаем, что будет, но точно интересно!"]))
+
+@app.route('/mood', methods=['GET', 'POST'])
+def mood():
+    if 'id' not in session:
+        return redirect(url_for('login'))
+
+    if request.method == 'POST':
+        mood = request.form['mood']
+        prediction = generate_prediction(mood)
+
+        # Отображаем предсказание
+        return render_template_string(TEMPLATES['prediction'], mood=mood, prediction=prediction)
+
+    return render_template_string(TEMPLATES['mood'])
+
+@app.route('/feedback', methods=['POST'])
+def feedback():
+    if 'id' not in session:
+        return redirect(url_for('login'))
+
+    mood = request.form['mood']
+    prediction = request.form['prediction']
+    event_id = request.form.get('event_id', None)
+    matched = request.form['matched'] == 'yes'
+
+    with sqlite3.connect('events.db') as conn:
+        cursor = conn.cursor()
+        cursor.execute('''INSERT INTO mood_feedback (user_id, mood, event_id, prediction, matched)
+                          VALUES (?, ?, ?, ?, ?)''',
+                       (session['id'], mood, event_id, prediction, matched))
+        conn.commit()
+
+    return redirect(url_for('index'))
 
 # Создание и подключение к базе данных SQLite
 def init_db():
@@ -35,6 +88,15 @@ def init_db():
                             date TEXT NOT NULL,
                             genre TEXT NOT NULL,
                             image TEXT NOT NULL)''')
+        cursor.execute('''CREATE TABLE IF NOT EXISTS mood_feedback (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    mood TEXT NOT NULL,
+                    event_id INTEGER,
+                    prediction TEXT NOT NULL,
+                    matched BOOLEAN,
+                    FOREIGN KEY(user_id) REFERENCES users(id),
+                    FOREIGN KEY(event_id) REFERENCES events(id))''')
         conn.commit()
 
 # Главная страница
@@ -46,14 +108,21 @@ def index():
         conn.close()
     elif 'id' not in session:
         return redirect(url_for('login'))
+    
+    genre_filter = request.args.get('genre') 
+
+     # Получаем уникальные жанры из базы данных
+    with sqlite3.connect('events.db') as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT genre FROM events")  # Используем DISTINCT для уникальных жанров
+        genres = [row['genre'] for row in cursor.fetchall()]  # Извлекаем все уникальные жанры
 
     # Получаем текущего пользователя
     with sqlite3.connect('events.db') as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM users WHERE id = ?", (session['id'],))
         user = cursor.fetchone()
-
-    genre_filter = request.args.get('genre') 
 
     # Получаем список афиш
     with sqlite3.connect('events.db') as conn:
@@ -64,7 +133,6 @@ def index():
             cursor.execute("SELECT * FROM events ORDER BY date ASC")
         events = cursor.fetchall()
 
-    genres = ["Музыка", "Кино", "Театр", "Выставки", "Спортивные события"]
     return render_template_string(TEMPLATES['home'], events=events, genres=genres, genre_filter=genre_filter, user = user)
 
 def get_db_connection():
@@ -167,7 +235,11 @@ def add_event():
     if 'id' not in session:
         return redirect(url_for('register'))
 
-    genres = ["Музыка", "Кино", "Театр", "Выставки", "Спортивные события"]
+    with sqlite3.connect('events.db') as conn:
+        conn.row_factory = sqlite3.Row  # Устанавливаем row_factory для получения словарей
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT genre FROM events")  # Используем DISTINCT для уникальных жанров
+        genres = [row['genre'] for row in cursor.fetchall()]
 
     if request.method == 'POST':
         name = request.form['name']
@@ -338,9 +410,10 @@ TEMPLATES = {
                     box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
                 }
                 .profile-image {
-                    width: 50px;
-                    height: 50px;
+                    width: 60px;
+                    height: 60px;
                     border-radius: 50px;
+                    border: 2px solid white;
                 }
                 .event-card h3 {
                     margin-top: 0;
@@ -403,10 +476,29 @@ TEMPLATES = {
                 }
                 .user-info a {
                     margin-left: 20px;
-                    margin-top: 15px;
+                    margin-top: 20px;
                     font-size: 16px;
                     color: inherit; /* blue colors for links too */
                     text-decoration: inherit; /* no underline */
+                }
+                .moood {
+                    background-color: #4CAF50;
+                    color: white;
+                    padding: 12px 20px;
+                    border: none;
+                    border-radius: 8px;
+                    cursor: pointer;
+                    text-decoration: none;
+                    font-size: 16px;
+                    transition: all 0.3s ease;
+                    display: block;
+                    margin-left: 40%;
+                    margin-right: 40%;
+                    margin-top: 30px;
+                }
+                .moood:hover {
+                    transform: scale(1.1); /* Увеличение кнопки при наведении */
+                    background-color: #007bff; /* Изменение цвета фона */
                 }
             </style>
         </head>
@@ -423,24 +515,25 @@ TEMPLATES = {
                         {% else %}
                             <p>Нет изображения профиля</p>
                         {% endif %}
-                        <a href="{{ url_for('logout') }}" class="button logout-button">Logout</a>
-                        <a href="{{ url_for('add_event') }}" class="button">Add Event</a>
+                        <a href="{{ url_for('add_event') }}" class="button">Добавить мероприятие</a>
                         <a href="{{ url_for('profile') }}" class="button">Редактировать профиль</a>
+                        <a href="{{ url_for('logout') }}" class="button logout-button">Выйти</a>
                     {% else %}
                         <p>Пожалуйста, войдите в систему.</p>
-                        <a href="{{ url_for('login') }}" class="button logout-button">Log in</a>
+                        <a href="{{ url_for('login') }}" class="button logout-button">Войти</a>
                     {% endif %}
                 </div>
+                <a href="{{ url_for('mood') }}" class="button moood">Ваше настроение</a>
             </div>
 
 
             <div class="section">
                 <div class="header hoho">
-                    <h2 >Upcoming Events</h2>
+                    <h2 >Предстоящие мероприятия</h2>
                     <form method="GET">
-                        <label for="genre">Filter by Genre:</label>
+                        <label for="genre">Фильтрация по жанру:</label>
                         <select name="genre" id="genre" onchange="this.form.submit()">
-                            <option value="">All</option>
+                            <option value="">Все</option>
                             {% for genre in genres %}
                                 <option value="{{ genre }}" {% if genre == genre_filter %} selected {% endif %}>{{ genre }}</option>
                             {% endfor %}
@@ -453,18 +546,18 @@ TEMPLATES = {
                             <div class="event-card">
                                 <h3>{{ event[1] }}</h3>
                                 <p>{{ event[2] }}</p>
-                                <p><strong>Date:</strong> {{ event[3] }}</p>
-                                <p><strong>Genre:</strong> {{ event[4] }}</p>
+                                <p><strong>Дата проведения:</strong> {{ event[3] }}</p>
+                                <p><strong>Жанр:</strong> {{ event[4] }}</p>
                                 <img src="{{ url_for('uploaded_file', filename=event[5]) }}" alt="Event Image">
                                 <br>
-                                <a href="{{ url_for('edit_event', event_id=event[0]) }}" class="button">Edit</a>
-                                <a href="{{ url_for('delete_event', event_id=event[0]) }}" class="button delete">Delete</a>
+                                <a href="{{ url_for('edit_event', event_id=event[0]) }}" class="button">Изменить</a>
+                                <a href="{{ url_for('delete_event', event_id=event[0]) }}" class="button delete">Удалить</a>
                                 <hr>
                             </div>
                         {% endfor %}
                     </div>
                 {% else %}
-                    <p>No events found. Try selecting a different genre or check back later.</p>
+                    <p>Никаких мероприятий не найдено. 🤷🏻‍♂️ Попробуйте выбрать другой жанр или вернитесь позднее.</p>
                 {% endif %}
             </div>
         </body>
@@ -547,18 +640,18 @@ TEMPLATES = {
     </head>
     <body>
         <div class="header">
-            <h1>Login</h1>
+            <h1>Вход</h1>
         </div>
         <div class="form-container">
             <form method="POST">
-                <label for="username">Username</label>
+                <label for="username">Логин</label>
                 <input type="text" id="username" name="username" required>
-                <label for="password">Password</label>
+                <label for="password">Пароль</label>
                 <input type="password" id="password" name="password" required>
-                <button type="submit" class="button">Login</button>
+                <button type="submit" class="button">Войти</button>
             </form>
             <div class="link">
-                <a href="{{ url_for('register') }}">Don't have an account? Register</a>
+                <a href="{{ url_for('register') }}">Еще нет аккаунта? 😱 Зарегистрироваться</a>
             </div>
         </div>
 
@@ -645,20 +738,20 @@ TEMPLATES = {
     </head>
     <body>
         <div class="header">
-            <h1>Register</h1>
+            <h1>Регистрация</h1>
         </div>
         <div class="form-container">
             <form method="POST">
-                <label for="username">Username</label>
+                <label for="username">Логин</label>
                 <input type="text" id="username" name="username" required>
-                <label for="email">Email</label>
+                <label for="email">Почта</label>
                 <input type="email" id="email" name="email" required>
-                <label for="password">Password</label>
+                <label for="password">Пароль</label>
                 <input type="password" id="password" name="password" required>
-                <button type="submit" class="button">Register</button>
+                <button type="submit" class="button">Зарегистрироваться</button>
             </form>
             <div class="link">
-                <a href="{{ url_for('login') }}">Already have an account? Login</a>
+                <a href="{{ url_for('login') }}">Уже есть аккаунт? Войти</a>
             </div>
         </div>
         <footer>
@@ -822,21 +915,21 @@ TEMPLATES = {
     </head>
     <body>
         <div class="header">
-            <h1>Add New Event</h1>
+            <h1>Добавление мероприятия</h1>
         </div>
         <div class="form-container">
             <form method="POST" action="/add_event" enctype="multipart/form-data">
-                <label for="title">Event Title</label>
+                <label for="title">Название мероприятия</label>
                 <input type="text" id="name" name="name" required>
-                <label for="description">Event Description</label>
+                <label for="description">Описание</label>
                 <textarea id="description" name="description" rows="4" required></textarea>
-                <label for="date">Event Date</label>
+                <label for="date">Дата проведения</label>
                 <input type="date" id="date" name="date" required>
-                <label for="genre">Genre</label>
+                <label for="genre">Жанр</label>
                 <input type="text" id="genre" name="genre" required>
-                <label for="image">Upload Image</label>
+                <label for="image">Изображение</label>
                 <input type="file" id="image" name="image" accept="image/*" required>
-                <button type="submit" class="button">Add Event</button>
+                <button type="submit" class="button">Добавить данные</button>
             </form>
         </div>
         <footer>
@@ -850,27 +943,88 @@ TEMPLATES = {
     <html>
         <head>
             <style>
-                body { font-family: Arial, sans-serif; background: #f3f4f7; display: flex; justify-content: center; align-items: center; height: 100vh; }
-                .card { background: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 0 15px rgba(0, 0, 0, 0.1); width: 400px; }
-                .button { background-color: #4CAF50; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; width: 100%; }
-                .button:hover { background-color: #45a049; }
+                body {
+                    font-family: 'Arial', sans-serif;
+                    background-color: #f5f5f5;
+                    margin: 0;
+                    padding: 0;
+                    color: #333;
+                }
+                .form-container {
+                    width: 100%;
+                    max-width: 600px;
+                    margin: 50px auto;
+                    padding: 20px;
+                    background-color: #fff;
+                    border-radius: 8px;
+                    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+                }
+                .button {
+                    background-color: #4CAF50;
+                    color: white;
+                    padding: 12px 20px;
+                    border: none;
+                    border-radius: 8px;
+                    cursor: pointer;
+                    text-decoration: none;
+                    font-size: 16px;
+                    transition: background-color 0.3s;
+                    width: 100%;
+                }
+                .button:hover {
+                    background-color: #45a049;
+                }
+                input[type="text"], input[type="file"], input[type="date"], textarea {
+                    width: 100%;
+                    padding: 10px;
+                    margin: 10px 0;
+                    border: 1px solid #ddd;
+                    border-radius: 6px;
+                    font-size: 16px;
+                    transition: border-color 0.3s;
+                }
+                input[type="text"]:focus, input[type="file"]:focus, input[type="date"]:focus, textarea:focus {
+                    border-color: #4CAF50;
+                    outline: none;
+                }
+                .header {
+                    background-color: #333;
+                    color: white;
+                    padding: 40px 20px;
+                    text-align: center;
+                    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+                }
+                .header h1 {
+                    font-size: 36px;
+                    margin: 0;
+                    font-weight: bold;
+                }
+                footer {
+                    text-align: center;
+                    padding: 20px;
+                    background-color: #333;
+                    color: white;
+                    font-size: 14px;
+                }
             </style>
         </head>
         <body>
-            <div class="card">
-                <h2>Edit Event</h2>
+            <div class="header">
+                <h1>Изменение мероприятия</h1>
+            </div>
+            <div class="form-container">
                 <form method="POST" enctype="multipart/form-data">
-                    Event Name: <input type="text" name="name" value="{{ event[1] }}" required><br><br>
-                    Description: <textarea name="description" required>{{ event[2] }}</textarea><br><br>
-                    Date: <input type="date" name="date" value="{{ event[3] }}" required><br><br>
-                    Genre:
+                    Название мероприятия: <input type="text" name="name" value="{{ event[1] }}" required><br><br>
+                    Описание: <textarea name="description" required>{{ event[2] }}</textarea><br><br>
+                    Дата проведения: <input type="date" name="date" value="{{ event[3] }}" required><br><br>
+                    Жанр:
                     <select name="genre">
                         {% for genre in genres %}
                             <option value="{{ genre }}" {% if genre == event[4] %}selected{% endif %}>{{ genre }}</option>
                         {% endfor %}
                     </select><br><br>
-                    Image: <input type="file" name="image"><br><br>
-                    <button type="submit" class="button">Update Event</button>
+                    Изображение: <input type="file" name="image"><br><br>
+                    <button type="submit" class="button">Обновить информацию</button>
                 </form>
             </div>
 
@@ -880,7 +1034,152 @@ TEMPLATES = {
 
         </body>
     </html>
-    '''
+    ''',
+    'mood': '''
+    <html>
+        <head>
+            <style>
+                body {
+                    font-family: 'Arial', sans-serif;
+                    background: #f4f4f4;
+                    margin: 0;
+                    padding: 0;
+                    color: #333;
+                }
+                .form-container {
+                    max-width: 400px;
+                    margin: 50px auto;
+                    padding: 20px;
+                    background-color: #fff;
+                    border-radius: 8px;
+                    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+                }
+                .form-container label {
+                    font-size: 18px;
+                    font-weight: bold;
+                    color: #333;
+                    display: block;
+                    margin-bottom: 10px;
+                }
+                .form-container select {
+                    width: 100%;
+                    padding: 10px;
+                    font-size: 16px;
+                    border-radius: 6px;
+                    border: 1px solid #ddd;
+                    margin-bottom: 20px;
+                    cursor: pointer;
+                    transition: border-color 0.3s;
+                }
+                .form-container select:focus {
+                    border-color: #4CAF50;
+                    outline: none;
+                }
+                .form-container button {
+                    background-color: #4CAF50;
+                    color: white;
+                    padding: 12px 20px;
+                    border: none;
+                    border-radius: 6px;
+                    cursor: pointer;
+                    font-size: 16px;
+                    transition: background-color 0.3s;
+                }
+                .form-container button:hover {
+                    background-color: #45a049;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="form-container">
+                <form method="POST" action="/mood">
+                    <label for="mood">Какое у вас сейчас настроение?</label>
+                    <select name="mood" id="mood" required>
+                        <option value="радость">Радость</option>
+                        <option value="тоска">Тоска</option>
+                        <option value="вдохновение">Вдохновение</option>
+                    </select>
+                    <button type="submit">Узнать предсказание</button>
+                </form>
+            </div>
+        </body>
+    </html>
+''',
+    'prediction': '''
+    <html>
+        <head>
+            <style>
+                body {
+                    font-family: 'Arial', sans-serif;
+                    background: #f4f4f4;
+                    margin: 0;
+                    padding: 0;
+                    color: #333;
+                }
+                .form-container {
+                    max-width: 400px;
+                    margin: 50px auto;
+                    padding: 20px;
+                    background-color: #fff;
+                    border-radius: 8px;
+                    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+                }
+                .form-container p {
+                    font-size: 18px;
+                    color: #333;
+                    margin-bottom: 20px;
+                }
+                .form-container label {
+                    font-size: 18px;
+                    font-weight: bold;
+                    color: #333;
+                    display: block;
+                    margin-bottom: 10px;
+                }
+                .form-container .button {
+                    background-color: #4CAF50;
+                    color: white;
+                    padding: 12px 20px;
+                    border: none;
+                    border-radius: 6px;
+                    cursor: pointer;
+                    font-size: 16px;
+                    transition: background-color 0.3s;
+                    margin-right: 10px;
+                }
+                .form-container .button:hover {
+                    background-color: #45a049;
+                }
+                .form-container .button.delete {
+                    background-color: #dc3545;
+                }
+                .form-container .button.delete:hover {
+                    background-color: #c82333;
+                }
+                .form-container .feedback-options {
+                    display: flex;
+                    justify-content: space-between;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="form-container">
+                <p>Ваше настроение: {{ mood }}</p>
+                <p>Ваше предсказание: {{ prediction }}</p>
+                <form method="POST" action="/feedback">
+                    <input type="hidden" name="mood" value="{{ mood }}">
+                    <input type="hidden" name="prediction" value="{{ prediction }}">
+                    <label>Предсказание оказалось верным?</label>
+                    <div class="feedback-options">
+                        <button name="matched" value="yes" class="button">Да</button>
+                        <button name="matched" value="no" class="button delete">Нет</button>
+                    </div>
+                </form>
+            </div>
+        </body>
+    </html>
+'''
+
 }
 
 if __name__ == '__main__':
